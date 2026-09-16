@@ -45,8 +45,6 @@ func SearchEndpointHandler(c echo.Context) error {
 		return c.String(http.StatusBadRequest, fmt.Sprintf("Invalid search query: %s", err))
 	}
 
-	// Continuations always belong to one concrete shelf/filter, so keep the
-	// existing single-request continuation path.
 	if filter == "all" && itct == "" && ctoken == "" {
 		return handleAllSearch(c, queryUnescape)
 	}
@@ -65,12 +63,16 @@ func handleAllSearch(c echo.Context, query string) error {
 	for _, filter := range allSearchFilters {
 		responseBytes, err := api.Search(query, searchFilters[filter], nil, nil, api.WebMusic)
 		if err != nil {
-			if firstErr == nil { firstErr = err }
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
 		var searchResponse _youtube.SearchResponse
 		if err = json.Unmarshal(responseBytes, &searchResponse); err != nil {
-			if firstErr == nil { firstErr = err }
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
 		lastResponse = searchResponse
@@ -80,11 +82,11 @@ func handleAllSearch(c echo.Context, query string) error {
 		searchContent := searchResponse.Content.TabbedSearchResultsRenderer.Tabs[0].TabRenderer.Content.SectionListRenderer.SectionListRendererContents
 		shelves, err := parseResponse(searchContent)
 		if err != nil {
-			if firstErr == nil { firstErr = err }
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
-		// Stamp the concrete filter onto every item so clients can distinguish
-		// media types in the combined response.
 		for i := range shelves {
 			for j := range shelves[i].Contents {
 				shelves[i].Contents[j].Type = filter
@@ -98,10 +100,10 @@ func handleAllSearch(c echo.Context, query string) error {
 	}
 	var continuation _youtube.NextContinuationData
 	r := struct {
-		Results []MusicShelf `json:"results"`
-		Response _youtube.SearchResponse `json:"response"`
+		Results      []MusicShelf                   `json:"results"`
+		Response     _youtube.SearchResponse        `json:"response"`
 		Continuation *_youtube.NextContinuationData `json:"continuation,omitempty"`
-		Type *string `json:"type,omitempty"`
+		Type         *string                        `json:"type,omitempty"`
 	}{results, lastResponse, &continuation, nil}
 	return c.JSON(http.StatusOK, r)
 }
@@ -148,18 +150,18 @@ func handleFilteredSearch(c echo.Context, query, filter, filterID, itct, ctoken 
 
 	if continuationResponse != nil {
 		r := struct {
-			ContinuationResults []IListItemRenderer `json:"results"`
-			Response _youtube.SearchResponse `json:"response"`
-			Continuation *_youtube.NextContinuationData `json:"continuation,omitempty"`
-			Type *string `json:"type,omitempty"`
+			ContinuationResults []IListItemRenderer            `json:"results"`
+			Response            _youtube.SearchResponse        `json:"response"`
+			Continuation        *_youtube.NextContinuationData `json:"continuation,omitempty"`
+			Type                *string                        `json:"type,omitempty"`
 		}{continuationResponse, searchResponse, &continuation, responseType}
 		return c.JSON(http.StatusOK, r)
 	}
 	r := struct {
-		Results []MusicShelf `json:"results"`
-		Response _youtube.SearchResponse `json:"response"`
+		Results      []MusicShelf                   `json:"results"`
+		Response     _youtube.SearchResponse        `json:"response"`
 		Continuation *_youtube.NextContinuationData `json:"continuation,omitempty"`
-		Type *string `json:"type,omitempty"`
+		Type         *string                        `json:"type,omitempty"`
 	}{regularResponse, searchResponse, &continuation, responseType}
 	return c.JSON(http.StatusOK, r)
 }
@@ -178,9 +180,13 @@ func parseResponse(content []_youtube.SectionListRendererContents) ([]MusicShelf
 	response := make([]MusicShelf, 0, len(content))
 	for _, shelf := range content {
 		currShelf := MusicShelf{}
-		if shelf.MusicShelfRenderer == nil { continue }
+		if shelf.MusicShelfRenderer == nil {
+			continue
+		}
 		title := ""
-		if len(shelf.MusicShelfRenderer.Title.Runs) != 0 { title = shelf.MusicShelfRenderer.Title.Runs[0].Text }
+		if len(shelf.MusicShelfRenderer.Title.Runs) != 0 {
+			title = shelf.MusicShelfRenderer.Title.Runs[0].Text
+		}
 		currShelf.Header.Title = title
 		currShelf.Contents = make([]IListItemRenderer, 0, len(shelf.MusicShelfRenderer.Contents))
 		for _, entry := range shelf.MusicShelfRenderer.Contents {
@@ -188,7 +194,9 @@ func parseResponse(content []_youtube.SectionListRendererContents) ([]MusicShelf
 			entryTitle := strings.ToLower(strings.ReplaceAll(title, " ", "_"))
 			item.Type = entryTitle
 			if entryTitle == "top_result" && item.Endpoint != nil {
-				if strings.Contains(item.Endpoint.PageType, "SINGLE") || strings.Contains(item.Endpoint.PageType, "ALBUM") { item.Type = "albums" }
+				if strings.Contains(item.Endpoint.PageType, "SINGLE") || strings.Contains(item.Endpoint.PageType, "ALBUM") {
+					item.Type = "albums"
+				}
 			}
 			currShelf.Contents = append(currShelf.Contents, item)
 		}
