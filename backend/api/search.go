@@ -95,8 +95,11 @@ func handleAllSearch(c echo.Context, query string) error {
 		results = append(results, shelves...)
 	}
 
-	if len(results) == 0 && firstErr != nil {
-		return c.String(http.StatusInternalServerError, fmt.Sprintf("Error building API request: %s", firstErr))
+	if len(results) == 0 {
+		if firstErr != nil {
+			return c.String(http.StatusInternalServerError, fmt.Sprintf("Error building API request: %s", firstErr))
+		}
+		return c.String(http.StatusInternalServerError, "Search response contained no supported result renderer")
 	}
 	var continuation _youtube.NextContinuationData
 	r := struct {
