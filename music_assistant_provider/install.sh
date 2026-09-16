@@ -2,10 +2,9 @@
 set -eu
 
 REPO="aaronh86/Beatbump"
-REF="feature/music-assistant-provider"
+REF="ma-provider"
 RAW="https://raw.githubusercontent.com/${REPO}/${REF}/music_assistant_provider/beatbump"
 
-# Locate the installed Music Assistant Python package in the current container.
 MA_DIR="$(python - <<'PY'
 import os
 import music_assistant
@@ -31,10 +30,15 @@ fetch() {
   fi
 }
 
-for file in __init__.py constants.py provider.py setup_flow.py manifest.json; do
+# The MVP provider implementation is intentionally contained in __init__.py.
+# setup_flow.py handles configuration and manifest.json describes the provider.
+for file in __init__.py setup_flow.py manifest.json; do
   echo "Downloading ${file}..."
   fetch "${RAW}/${file}" "${PROVIDER_DIR}/${file}"
 done
+
+# Remove files from any earlier incomplete installer attempt.
+rm -f "${PROVIDER_DIR}/constants.py" "${PROVIDER_DIR}/provider.py"
 
 python -m compileall -q "${PROVIDER_DIR}"
 
@@ -43,4 +47,4 @@ echo "Beatbump provider installed successfully."
 echo "Restart the Music Assistant container, then go to:"
 echo "Settings -> Music Sources -> Add a music source -> Beatbump"
 echo
-echo "NOTE: this modifies the running container filesystem. A Music Assistant image update/recreation may remove it; rerun this installer after an update until the provider is packaged upstream or bind-mounted persistently."
+echo "NOTE: this modifies the running container filesystem. A Music Assistant image update/recreation may remove it."
