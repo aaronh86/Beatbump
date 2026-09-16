@@ -98,10 +98,9 @@ func handleAllSearch(c echo.Context, query string) error {
 		return c.String(http.StatusInternalServerError, "Search response contained no supported result renderer")
 	}
 
-	r := struct {
+	return c.JSON(http.StatusOK, struct {
 		Results []MusicShelf `json:"results"`
-	}{Results: results}
-	return c.JSON(http.StatusOK, r)
+	}{Results: results})
 }
 
 func handleFilteredSearch(c echo.Context, query, filter, filterID, itct, ctoken string) error {
