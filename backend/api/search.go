@@ -42,7 +42,6 @@ func SearchEndpointHandler(c echo.Context) error {
 		return c.String(http.StatusBadRequest, fmt.Sprintf("Invalid search query: %s", err))
 	}
 
-	// Treat an omitted filter the same as the historical unfiltered/all search.
 	if (filter == "all" || filter == "") && itct == "" && ctoken == "" {
 		return handleAllSearch(c, queryUnescape)
 	}
@@ -55,7 +54,6 @@ func SearchEndpointHandler(c echo.Context) error {
 
 func handleAllSearch(c echo.Context, query string) error {
 	results := make([]MusicShelf, 0, len(allSearchFilters))
-	var lastResponse _youtube.SearchResponse
 	var firstErr error
 
 	for _, filter := range allSearchFilters {
@@ -73,7 +71,6 @@ func handleAllSearch(c echo.Context, query string) error {
 			}
 			continue
 		}
-		lastResponse = searchResponse
 		if len(searchResponse.Content.TabbedSearchResultsRenderer.Tabs) == 0 {
 			continue
 		}
@@ -99,13 +96,12 @@ func handleAllSearch(c echo.Context, query string) error {
 		}
 		return c.String(http.StatusInternalServerError, "Search response contained no supported result renderer")
 	}
-	var continuation _youtube.NextContinuationData
+
+	// Keep the public response shape compatible while avoiding a misleading raw
+	// response from only one of the several requests used to build the results.
 	r := struct {
-		Results      []MusicShelf                   `json:"results"`
-		Response     _youtube.SearchResponse        `json:"response"`
-		Continuation *_youtube.NextContinuationData `json:"continuation,omitempty"`
-		Type         *string                        `json:"type,omitempty"`
-	}{results, lastResponse, &continuation, nil}
+		Results []MusicShelf `json:"results"`
+	}{Results: results}
 	return c.JSON(http.StatusOK, r)
 }
 
