@@ -4,6 +4,7 @@ set -eu
 REPO="aaronh86/Beatbump"
 REF="ma-provider"
 RAW="https://raw.githubusercontent.com/${REPO}/${REF}/music_assistant_provider/beatbump"
+LOGO_RAW="https://raw.githubusercontent.com/${REPO}/main/app/static/logo.svg"
 
 MA_DIR="$(python - <<'PY'
 import os
@@ -30,21 +31,20 @@ fetch() {
   fi
 }
 
-# The MVP provider implementation is intentionally contained in __init__.py.
-# setup_flow.py handles configuration and manifest.json describes the provider.
 for file in __init__.py setup_flow.py manifest.json; do
   echo "Downloading ${file}..."
   fetch "${RAW}/${file}" "${PROVIDER_DIR}/${file}"
 done
 
-# Remove files from any earlier incomplete installer attempt.
-rm -f "${PROVIDER_DIR}/constants.py" "${PROVIDER_DIR}/provider.py"
+# Music Assistant natively supports icon.svg in the provider directory.
+# Reuse Beatbump's own logo asset rather than maintaining a duplicate copy.
+echo "Downloading Beatbump icon..."
+fetch "${LOGO_RAW}" "${PROVIDER_DIR}/icon.svg"
 
+rm -f "${PROVIDER_DIR}/constants.py" "${PROVIDER_DIR}/provider.py"
 python -m compileall -q "${PROVIDER_DIR}"
 
 echo
 echo "Beatbump provider installed successfully."
-echo "Restart the Music Assistant container, then go to:"
-echo "Settings -> Music Sources -> Add a music source -> Beatbump"
-echo
-echo "NOTE: this modifies the running container filesystem. A Music Assistant image update/recreation may remove it."
+echo "Restart Music Assistant, then add/configure Beatbump under Music Sources."
+echo "NOTE: for TrueNAS, use a persistent host-path mount for this provider directory."
