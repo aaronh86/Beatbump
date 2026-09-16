@@ -97,8 +97,6 @@ func handleAllSearch(c echo.Context, query string) error {
 		return c.String(http.StatusInternalServerError, "Search response contained no supported result renderer")
 	}
 
-	// Keep the public response shape compatible while avoiding a misleading raw
-	// response from only one of the several requests used to build the results.
 	r := struct {
 		Results []MusicShelf `json:"results"`
 	}{Results: results}
