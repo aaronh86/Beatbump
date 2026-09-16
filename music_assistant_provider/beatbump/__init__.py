@@ -74,26 +74,43 @@ class BeatbumpProvider(MusicProvider):
         )
         tracks: list[Track] = []
         seen: set[str] = set()
-        for candidate in _walk_dicts(payload.get("results", payload)):
-            video_id = _find_string(candidate, "videoId", "video_id")
-            if not video_id or video_id in seen:
+
+        # Beatbump's filtered search response is a list of shelves:
+        # {"results": [{"header": {"title": "Songs"}, "contents": [...] }]}
+        # Parse the normalized contents directly instead of recursively walking the
+        # raw YouTube response, which is also included elsewhere in the payload.
+        for shelf in payload.get("results") or []:
+            if not isinstance(shelf, dict):
                 continue
-            title = _extract_title(candidate)
-            if not title:
-                continue
-            seen.add(video_id)
-            tracks.append(self._track_from_search(video_id, title, candidate))
-            if len(tracks) >= limit:
-                break
+            for candidate in shelf.get("contents") or []:
+                if not isinstance(candidate, dict):
+                    continue
+                if candidate.get("type") not in (None, "songs"):
+                    continue
+                video_id = candidate.get("videoId")
+                title = candidate.get("title")
+                if not isinstance(video_id, str) or not video_id or video_id in seen:
+                    continue
+                if not isinstance(title, str) or not title:
+                    continue
+                seen.add(video_id)
+                tracks.append(self._track_from_search(video_id, title, candidate))
+                if len(tracks) >= limit:
+                    return SearchResults(tracks=UniqueList(tracks))
         return SearchResults(tracks=UniqueList(tracks))
 
     def _track_from_search(
         self, video_id: str, title: str, data: dict[str, Any]
     ) -> Track:
-        artist = _extract_artist(data)
+        artist, artist_id = _extract_artist(data)
         duration = _extract_duration(data)
         artists = UniqueList(
-            [ItemMapping(media_type=MediaType.ARTIST, item_id=artist, provider=self.instance_id, name=artist)]
+            [ItemMapping(
+                media_type=MediaType.ARTIST,
+                item_id=artist_id or artist,
+                provider=self.instance_id,
+                name=artist,
+            )]
         ) if artist else UniqueList()
         return Track(
             item_id=video_id,
@@ -156,56 +173,23 @@ class BeatbumpProvider(MusicProvider):
         )
 
 
-def _walk_dicts(value: Any):
-    if isinstance(value, dict):
-        yield value
-        for child in value.values():
-            yield from _walk_dicts(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _walk_dicts(child)
+def _extract_artist(data: dict[str, Any]) -> tuple[str, str | None]:
+    # Beatbump exposes normalized artist metadata here.
+    artist_info = data.get("artistInfo")
+    if isinstance(artist_info, dict):
+        artists = artist_info.get("artist")
+        if isinstance(artists, list) and artists and isinstance(artists[0], dict):
+            first = artists[0]
+            name = first.get("text")
+            browse_id = first.get("browseId")
+            if isinstance(name, str) and name:
+                return name, browse_id if isinstance(browse_id, str) else None
 
-
-def _find_string(data: dict[str, Any], *keys: str) -> str | None:
-    for key in keys:
-        value = data.get(key)
-        if isinstance(value, str) and value:
-            return value
-    for value in data.values():
-        if isinstance(value, dict):
-            found = _find_string(value, *keys)
-            if found:
-                return found
-    return None
-
-
-def _extract_title(data: dict[str, Any]) -> str | None:
-    for key in ("title", "name"):
-        value = data.get(key)
-        if isinstance(value, str) and value:
-            return value
-        if isinstance(value, dict):
-            runs = value.get("runs")
-            if isinstance(runs, list) and runs and isinstance(runs[0], dict):
-                text = runs[0].get("text")
-                if isinstance(text, str) and text:
-                    return text
-    return _find_string(data, "title")
-
-
-def _extract_artist(data: dict[str, Any]) -> str:
     for key in ("artist", "author"):
         value = data.get(key)
-        if isinstance(value, str):
-            return value
-    artists = data.get("artists")
-    if isinstance(artists, list) and artists:
-        first = artists[0]
-        if isinstance(first, str):
-            return first
-        if isinstance(first, dict):
-            return str(first.get("name") or first.get("text") or "")
-    return ""
+        if isinstance(value, str) and value:
+            return value, None
+    return "", None
 
 
 def _extract_duration(data: dict[str, Any]) -> int | None:
@@ -213,6 +197,22 @@ def _extract_duration(data: dict[str, Any]) -> int | None:
         value = _as_int(data.get(key))
         if value is not None:
             return value
+
+    # Search results expose duration as the final subtitle entry, e.g. "8:26".
+    subtitle = data.get("subtitle")
+    if isinstance(subtitle, list):
+        for entry in reversed(subtitle):
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            if not isinstance(text, str):
+                continue
+            parts = text.split(":")
+            if len(parts) in (2, 3) and all(part.isdigit() for part in parts):
+                seconds = 0
+                for part in parts:
+                    seconds = seconds * 60 + int(part)
+                return seconds
     return None
 
 
