@@ -24,7 +24,8 @@ var searchFilters = map[string]string{
 
 // YouTube Music's unfiltered search response is not stable across clients and can
 // omit the TabbedSearchResultsRenderer that Beatbump historically expected. For
-// filter=all we therefore aggregate the stable typed searches instead.
+// filter=all we aggregate the stable typed searches instead. This costs several
+// upstream requests, but makes the public all-search endpoint deterministic.
 var allSearchFilters = []string{"songs", "artists", "albums", "all_playlists", "videos"}
 
 func SearchEndpointHandler(c echo.Context) error {
