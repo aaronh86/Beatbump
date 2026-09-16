@@ -31,9 +31,6 @@ func SearchEndpointHandler(c echo.Context) error {
 	urlQuery := c.Request().URL.Query()
 	query := urlQuery.Get("q")
 	filter := urlQuery.Get("filter")
-	if filter == "" {
-		filter = "all"
-	}
 	ctoken := urlQuery.Get("ctoken")
 	itct := urlQuery.Get("itct")
 
@@ -45,7 +42,8 @@ func SearchEndpointHandler(c echo.Context) error {
 		return c.String(http.StatusBadRequest, fmt.Sprintf("Invalid search query: %s", err))
 	}
 
-	if filter == "all" && itct == "" && ctoken == "" {
+	// Treat an omitted filter the same as the historical unfiltered/all search.
+	if (filter == "all" || filter == "") && itct == "" && ctoken == "" {
 		return handleAllSearch(c, queryUnescape)
 	}
 	filterID, ok := searchFilters[filter]
