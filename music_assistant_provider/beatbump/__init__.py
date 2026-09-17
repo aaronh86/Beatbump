@@ -80,13 +80,7 @@ class BeatbumpProvider(MusicProvider):
 
     def _browse_folder(self, item_id: str, path: str, name: str, data: dict[str, Any] | None = None) -> BrowseFolder:
         image = self._image_from_data(data) if data else None
-        return BrowseFolder(
-            item_id=item_id,
-            provider=self.instance_id,
-            path=f"{self.instance_id}://{path}",
-            name=name,
-            image=image,
-        )
+        return BrowseFolder(item_id=item_id, provider=self.instance_id, path=f"{self.instance_id}://{path}", name=name, image=image)
 
     def _add_images(self, media_item: Any, data: dict[str, Any]) -> None:
         image = self._image_from_data(data)
@@ -96,8 +90,7 @@ class BeatbumpProvider(MusicProvider):
     def _carousel_folders(self, payload: dict[str, Any], prefix: str) -> list[BrowseFolder]:
         result: list[BrowseFolder] = []
         for index, carousel in enumerate(payload.get("carousels") or []):
-            if not isinstance(carousel, dict):
-                continue
+            if not isinstance(carousel, dict): continue
             items = carousel.get("items") or carousel.get("contents") or []
             if items:
                 result.append(self._browse_folder(f"{prefix}-{index}", f"{prefix}/section/{index}", _carousel_name(carousel) or f"Section {index + 1}", carousel))
@@ -105,14 +98,11 @@ class BeatbumpProvider(MusicProvider):
 
     def _carousel_items(self, payload: dict[str, Any], index: int, prefix: str) -> list[MediaItemType | BrowseFolder]:
         carousels = payload.get("carousels") or []
-        if index < 0 or index >= len(carousels) or not isinstance(carousels[index], dict):
-            return []
-        result: list[MediaItemType | BrowseFolder] = []
-        seen: set[str] = set()
+        if index < 0 or index >= len(carousels) or not isinstance(carousels[index], dict): return []
+        result: list[MediaItemType | BrowseFolder] = []; seen: set[str] = set()
         items = carousels[index].get("items") or carousels[index].get("contents") or []
         for position, item in enumerate(items, start=1):
-            if not isinstance(item, dict):
-                continue
+            if not isinstance(item, dict): continue
             video_id = _first_string(item, "videoId")
             if video_id:
                 if video_id not in seen and (track := self._parse_track(item, position)):
@@ -121,20 +111,16 @@ class BeatbumpProvider(MusicProvider):
             endpoint = item.get("endpoint") or {}
             browse_id = _first_string(endpoint, "browseId") if isinstance(endpoint, dict) else None
             page_type = _first_string(endpoint, "pageType") if isinstance(endpoint, dict) else ""
-            playlist_id = _first_string(item, "playlistId")
-            name = _first_string(item, "title", "name", "text")
-            if not name:
-                continue
+            playlist_id = _first_string(item, "playlistId"); name = _first_string(item, "title", "name", "text")
+            if not name: continue
             if browse_id and "ARTIST" in page_type:
                 key = f"artist:{browse_id}"
                 if key not in seen:
-                    seen.add(key)
-                    result.append(self._browse_folder(key, f"artist/{quote(browse_id, safe='')}", name, item))
+                    seen.add(key); result.append(self._browse_folder(key, f"artist/{quote(browse_id, safe='')}", name, item))
                 continue
             list_id = browse_id or playlist_id
             if list_id and list_id not in seen:
-                seen.add(list_id)
-                result.append(self._browse_folder(f"item-{list_id}", f"{prefix}/item/{quote(list_id, safe='')}", name, item))
+                seen.add(list_id); result.append(self._browse_folder(f"item-{list_id}", f"{prefix}/item/{quote(list_id, safe='')}", name, item))
         return result
 
     async def _browse_playlist_tracks(self, list_id: str) -> list[Track]:
@@ -142,13 +128,10 @@ class BeatbumpProvider(MusicProvider):
         return self._tracks_from_items(payload.get("tracks") or [])
 
     def _tracks_from_items(self, items: Any) -> list[Track]:
-        result: list[Track] = []
-        seen: set[str] = set()
-        if not isinstance(items, list):
-            return result
+        result: list[Track] = []; seen: set[str] = set()
+        if not isinstance(items, list): return result
         for position, item in enumerate(items, start=1):
-            if not isinstance(item, dict):
-                continue
+            if not isinstance(item, dict): continue
             video_id = _first_string(item, "videoId")
             if video_id and video_id not in seen and (track := self._parse_track(item, position)):
                 seen.add(video_id); result.append(track)
@@ -158,31 +141,24 @@ class BeatbumpProvider(MusicProvider):
         payload = await self._get_json(f"/api/v1/artist/{artist_id}")
         result: list[MediaItemType | BrowseFolder] = []
         songs = payload.get("songs") or {}
-        if isinstance(songs, dict):
-            result.extend(self._tracks_from_items(songs.get("contents") or songs.get("items") or []))
-        result.extend(self._carousel_folders(payload, f"artist/{quote(artist_id, safe='')}"))
-        return result
+        if isinstance(songs, dict): result.extend(self._tracks_from_items(songs.get("contents") or songs.get("items") or []))
+        result.extend(self._carousel_folders(payload, f"artist/{quote(artist_id, safe='')}")); return result
 
     async def browse(self, path: str) -> Sequence[MediaItemType | BrowseFolder]:
         subpath = path.split("://", 1)[1].strip("/") if "://" in path else ""
         if not subpath:
             return [self._browse_folder("home", "home", "Home"), self._browse_folder("trending", "trending", "Trending"), self._browse_folder("explore", "explore", "Explore")]
-        parts = subpath.split("/")
-        root = parts[0]
+        parts = subpath.split("/"); root = parts[0]
         if root == "artist" and len(parts) >= 2:
-            artist_id = unquote(parts[1])
-            payload = await self._get_json(f"/api/v1/artist/{artist_id}")
+            artist_id = unquote(parts[1]); payload = await self._get_json(f"/api/v1/artist/{artist_id}")
             if len(parts) == 2:
-                result: list[MediaItemType | BrowseFolder] = []
-                songs = payload.get("songs") or {}
+                result: list[MediaItemType | BrowseFolder] = []; songs = payload.get("songs") or {}
                 if isinstance(songs, dict): result.extend(self._tracks_from_items(songs.get("contents") or songs.get("items") or []))
-                result.extend(self._carousel_folders(payload, f"artist/{parts[1]}"))
-                return result
+                result.extend(self._carousel_folders(payload, f"artist/{parts[1]}")); return result
             if len(parts) == 4 and parts[2] == "section":
                 try: return self._carousel_items(payload, int(parts[3]), f"artist/{parts[1]}")
                 except ValueError: return []
-            if len(parts) == 4 and parts[2] == "item":
-                return await self._browse_playlist_tracks(unquote(parts[3]))
+            if len(parts) == 4 and parts[2] == "item": return await self._browse_playlist_tracks(unquote(parts[3]))
             return []
         if root in ("home", "trending"):
             payload = await self._get_json("/api/v1/home.json" if root == "home" else "/api/v1/trending")
@@ -196,8 +172,7 @@ class BeatbumpProvider(MusicProvider):
             if len(parts) == 1:
                 payload = await self._get_json_any("/api/v1/explore")
                 if not isinstance(payload, list): return []
-                result: list[BrowseFolder] = []
-                n = 0
+                result: list[BrowseFolder] = []; n = 0
                 for section in payload:
                     if not isinstance(section, dict): continue
                     for category in section.get("section") or []:
@@ -205,13 +180,10 @@ class BeatbumpProvider(MusicProvider):
                         name = _first_string(category, "text", "name"); endpoint = category.get("endpoint") or {}
                         params = _first_string(endpoint, "params") if isinstance(endpoint, dict) else None
                         if name and params:
-                            token = quote(params, safe="")
-                            result.append(self._browse_folder(f"explore-{n}", f"explore/category/{token}", name)); n += 1
+                            token = quote(params, safe=""); result.append(self._browse_folder(f"explore-{n}", f"explore/category/{token}", name)); n += 1
                 return result
             if len(parts) >= 3 and parts[1] == "category":
-                token = parts[2]; category = unquote(token)
-                payload = await self._get_json(f"/api/v1/explore/{quote(category, safe='')}")
-                prefix = f"explore/category/{token}"
+                token = parts[2]; category = unquote(token); payload = await self._get_json(f"/api/v1/explore/{quote(category, safe='')}"); prefix = f"explore/category/{token}"
                 if len(parts) == 3: return self._carousel_folders(payload, prefix)
                 if len(parts) == 5 and parts[3] == "section":
                     try: return self._carousel_items(payload, int(parts[4]), prefix)
@@ -233,24 +205,23 @@ class BeatbumpProvider(MusicProvider):
         if artist_name and (mapping := self._artist_mapping(artist_name, artist_id)): artists.append(mapping)
         track = Track(item_id=video_id, provider=self.instance_id, name=title, duration=_extract_duration(data), provider_mappings={self._provider_mapping(video_id, True)}, position=position or None)
         if artists: track.artists = artists
-        self._add_images(track, data)
-        return track
+        self._add_images(track, data); return track
 
     async def get_artist(self, prov_artist_id: str) -> Artist:
         payload = await self._get_json(f"/api/v1/artist/{prov_artist_id}"); header = payload.get("header") or {}
         return Artist(item_id=prov_artist_id, provider=self.instance_id, name=_first_string(header, "name", "title") or prov_artist_id, provider_mappings={self._provider_mapping(prov_artist_id)})
 
     async def get_track(self, prov_track_id: str) -> Track:
+        """Resolve a playable track without recursively resolving artist objects."""
         payload = await self._get_json("/api/v1/player.json", videoId=prov_track_id); details = payload.get("videoDetails") or {}
-        title = str(details.get("title") or prov_track_id); duration = _as_int(details.get("lengthSeconds")); artist_mapping = None; source_item = None
+        title = str(details.get("title") or prov_track_id); duration = _as_int(details.get("lengthSeconds")); source_item = None
         try:
             for candidate in await self._search_songs(title):
                 if _first_string(candidate, "videoId") == prov_track_id:
-                    source_item = candidate; artist_name, artist_id = _extract_artist(candidate)
-                    artist_mapping = self._artist_mapping(artist_name, artist_id) if artist_name else None; break
-        except Exception as err: self.logger.debug("Could not enrich Beatbump track %s: %s", prov_track_id, err)
+                    source_item = candidate; break
+        except Exception as err:
+            self.logger.debug("Could not enrich Beatbump track %s: %s", prov_track_id, err)
         track = Track(item_id=prov_track_id, provider=self.instance_id, name=title, duration=duration, provider_mappings={self._provider_mapping(prov_track_id, True)})
-        if artist_mapping: track.artists = UniqueList([artist_mapping])
         if source_item: self._add_images(track, source_item)
         return track
 
