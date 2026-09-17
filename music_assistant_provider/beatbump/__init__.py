@@ -68,21 +68,30 @@ class BeatbumpProvider(MusicProvider):
             result.tracks = [track for item in items[:limit] if (track := self._parse_track(item))]
         return result
 
-    def _browse_folder(self, item_id: str, path: str, name: str, data: dict[str, Any] | None = None) -> BrowseFolder:
-        folder = BrowseFolder(item_id=item_id, provider=self.instance_id, path=f"{self.instance_id}://{path}", name=name)
-        if data:
-            self._add_images(folder, data)
-        return folder
-
-    def _add_images(self, media_item: Any, data: dict[str, Any]) -> None:
+    def _image_from_data(self, data: dict[str, Any]) -> MediaItemImage | None:
         thumbs = data.get("thumbnails") or data.get("foregroundThumbnails") or []
         if not isinstance(thumbs, list) or not thumbs:
-            return
+            return None
         valid = [x for x in thumbs if isinstance(x, dict) and isinstance(x.get("url"), str) and x.get("url")]
         if not valid:
-            return
+            return None
         best = max(valid, key=lambda x: (_as_int(x.get("width")) or 0) * (_as_int(x.get("height")) or 0))
-        media_item.metadata.images = UniqueList([MediaItemImage(type=ImageType.THUMB, path=best["url"], provider=self.instance_id, remotely_accessible=True)])
+        return MediaItemImage(type=ImageType.THUMB, path=best["url"], provider=self.instance_id, remotely_accessible=True)
+
+    def _browse_folder(self, item_id: str, path: str, name: str, data: dict[str, Any] | None = None) -> BrowseFolder:
+        image = self._image_from_data(data) if data else None
+        return BrowseFolder(
+            item_id=item_id,
+            provider=self.instance_id,
+            path=f"{self.instance_id}://{path}",
+            name=name,
+            image=image,
+        )
+
+    def _add_images(self, media_item: Any, data: dict[str, Any]) -> None:
+        image = self._image_from_data(data)
+        if image is not None:
+            media_item.metadata.images = UniqueList([image])
 
     def _carousel_folders(self, payload: dict[str, Any], prefix: str) -> list[BrowseFolder]:
         result: list[BrowseFolder] = []
@@ -91,7 +100,7 @@ class BeatbumpProvider(MusicProvider):
                 continue
             items = carousel.get("items") or carousel.get("contents") or []
             if items:
-                result.append(self._browse_folder(f"{prefix}-{index}", f"{prefix}/section/{index}", _carousel_name(carousel) or f"Section {index + 1}"))
+                result.append(self._browse_folder(f"{prefix}-{index}", f"{prefix}/section/{index}", _carousel_name(carousel) or f"Section {index + 1}", carousel))
         return result
 
     def _carousel_items(self, payload: dict[str, Any], index: int, prefix: str) -> list[MediaItemType | BrowseFolder]:
