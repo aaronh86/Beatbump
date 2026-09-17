@@ -6,9 +6,9 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from music_assistant_models.enums import ContentType, MediaType, ProviderFeature, StreamType
+from music_assistant_models.enums import ContentType, ImageType, MediaType, ProviderFeature, StreamType
 from music_assistant_models.media_items import (
-    Artist, AudioFormat, BrowseFolder, ItemMapping, MediaItemType,
+    Artist, AudioFormat, BrowseFolder, ItemMapping, MediaItemImage, MediaItemType,
     ProviderMapping, SearchResults, Track, UniqueList,
 )
 from music_assistant_models.streamdetails import StreamDetails
@@ -50,13 +50,16 @@ class BeatbumpProvider(MusicProvider):
             raise ValueError("Beatbump returned an unexpected response")
         return data
 
-    async def _search_songs(self, query: str) -> list[dict[str, Any]]:
-        payload = await self._get_json("/api/v1/search.json", q=query, filter="songs")
+    async def _search_items(self, query: str, filter_name: str) -> list[dict[str, Any]]:
+        payload = await self._get_json("/api/v1/search.json", q=query, filter=filter_name)
         items: list[dict[str, Any]] = []
         for shelf in payload.get("results") or []:
             if isinstance(shelf, dict):
                 items.extend(x for x in (shelf.get("contents") or shelf.get("items") or []) if isinstance(x, dict))
         return items
+
+    async def _search_songs(self, query: str) -> list[dict[str, Any]]:
+        return await self._search_items(query, "songs")
 
     async def search(self, search_query: str, media_types: list[MediaType], limit: int = 5) -> SearchResults:
         result = SearchResults()
@@ -65,8 +68,21 @@ class BeatbumpProvider(MusicProvider):
             result.tracks = [track for item in items[:limit] if (track := self._parse_track(item))]
         return result
 
-    def _browse_folder(self, item_id: str, path: str, name: str) -> BrowseFolder:
-        return BrowseFolder(item_id=item_id, provider=self.instance_id, path=f"{self.instance_id}://{path}", name=name)
+    def _browse_folder(self, item_id: str, path: str, name: str, data: dict[str, Any] | None = None) -> BrowseFolder:
+        folder = BrowseFolder(item_id=item_id, provider=self.instance_id, path=f"{self.instance_id}://{path}", name=name)
+        if data:
+            self._add_images(folder, data)
+        return folder
+
+    def _add_images(self, media_item: Any, data: dict[str, Any]) -> None:
+        thumbs = data.get("thumbnails") or data.get("foregroundThumbnails") or []
+        if not isinstance(thumbs, list) or not thumbs:
+            return
+        valid = [x for x in thumbs if isinstance(x, dict) and isinstance(x.get("url"), str) and x.get("url")]
+        if not valid:
+            return
+        best = max(valid, key=lambda x: (_as_int(x.get("width")) or 0) * (_as_int(x.get("height")) or 0))
+        media_item.metadata.images = UniqueList([MediaItemImage(type=ImageType.THUMB, path=best["url"], provider=self.instance_id, remotely_accessible=True)])
 
     def _carousel_folders(self, payload: dict[str, Any], prefix: str) -> list[BrowseFolder]:
         result: list[BrowseFolder] = []
@@ -74,10 +90,8 @@ class BeatbumpProvider(MusicProvider):
             if not isinstance(carousel, dict):
                 continue
             items = carousel.get("items") or carousel.get("contents") or []
-            if not items:
-                continue
-            name = _carousel_name(carousel) or f"Section {index + 1}"
-            result.append(self._browse_folder(f"{prefix}-{index}", f"{prefix}/section/{index}", name))
+            if items:
+                result.append(self._browse_folder(f"{prefix}-{index}", f"{prefix}/section/{index}", _carousel_name(carousel) or f"Section {index + 1}"))
         return result
 
     def _carousel_items(self, payload: dict[str, Any], index: int, prefix: str) -> list[MediaItemType | BrowseFolder]:
@@ -93,101 +107,107 @@ class BeatbumpProvider(MusicProvider):
             video_id = _first_string(item, "videoId")
             if video_id:
                 if video_id not in seen and (track := self._parse_track(item, position)):
-                    seen.add(video_id)
-                    result.append(track)
+                    seen.add(video_id); result.append(track)
                 continue
-            playlist_id = _first_string(item, "playlistId")
             endpoint = item.get("endpoint") or {}
             browse_id = _first_string(endpoint, "browseId") if isinstance(endpoint, dict) else None
-            page_type = _first_string(endpoint, "pageType") if isinstance(endpoint, dict) else None
+            page_type = _first_string(endpoint, "pageType") if isinstance(endpoint, dict) else ""
+            playlist_id = _first_string(item, "playlistId")
             name = _first_string(item, "title", "name", "text")
-            # Beatbump's playlist Browse request needs the endpoint browseId (for
-            # example VLRDCLAK5...), not the RDCLAK5... playlistId exposed on
-            # Home/Trending items. Prefer browseId whenever Beatbump supplies it.
+            if not name:
+                continue
+            if browse_id and "ARTIST" in page_type:
+                key = f"artist:{browse_id}"
+                if key not in seen:
+                    seen.add(key)
+                    result.append(self._browse_folder(key, f"artist/{quote(browse_id, safe='')}", name, item))
+                continue
             list_id = browse_id or playlist_id
-            if name and list_id and list_id not in seen:
+            if list_id and list_id not in seen:
                 seen.add(list_id)
-                token = quote(list_id, safe="")
-                result.append(self._browse_folder(f"item-{list_id}", f"{prefix}/item/{token}", name))
+                result.append(self._browse_folder(f"item-{list_id}", f"{prefix}/item/{quote(list_id, safe='')}", name, item))
         return result
 
     async def _browse_playlist_tracks(self, list_id: str) -> list[Track]:
         payload = await self._get_json("/api/v1/playlist.json", list=list_id)
+        return self._tracks_from_items(payload.get("tracks") or [])
+
+    def _tracks_from_items(self, items: Any) -> list[Track]:
         result: list[Track] = []
         seen: set[str] = set()
-        for position, item in enumerate(payload.get("tracks") or [], start=1):
+        if not isinstance(items, list):
+            return result
+        for position, item in enumerate(items, start=1):
             if not isinstance(item, dict):
                 continue
             video_id = _first_string(item, "videoId")
-            if not video_id or video_id in seen:
-                continue
-            if track := self._parse_track(item, position):
-                seen.add(video_id)
-                result.append(track)
+            if video_id and video_id not in seen and (track := self._parse_track(item, position)):
+                seen.add(video_id); result.append(track)
+        return result
+
+    async def _browse_artist(self, artist_id: str) -> list[MediaItemType | BrowseFolder]:
+        payload = await self._get_json(f"/api/v1/artist/{artist_id}")
+        result: list[MediaItemType | BrowseFolder] = []
+        songs = payload.get("songs") or {}
+        if isinstance(songs, dict):
+            result.extend(self._tracks_from_items(songs.get("contents") or songs.get("items") or []))
+        result.extend(self._carousel_folders(payload, f"artist/{quote(artist_id, safe='')}"))
         return result
 
     async def browse(self, path: str) -> Sequence[MediaItemType | BrowseFolder]:
-        """Expose Beatbump Home, Trending and Explore as a native MA browse tree."""
         subpath = path.split("://", 1)[1].strip("/") if "://" in path else ""
         if not subpath:
-            return [
-                self._browse_folder("home", "home", "Home"),
-                self._browse_folder("trending", "trending", "Trending"),
-                self._browse_folder("explore", "explore", "Explore"),
-            ]
-
+            return [self._browse_folder("home", "home", "Home"), self._browse_folder("trending", "trending", "Trending"), self._browse_folder("explore", "explore", "Explore")]
         parts = subpath.split("/")
         root = parts[0]
-        if root in ("home", "trending"):
-            endpoint = "/api/v1/home.json" if root == "home" else "/api/v1/trending"
-            payload = await self._get_json(endpoint)
-            if len(parts) == 1:
-                return self._carousel_folders(payload, root)
-            if len(parts) == 3 and parts[1] == "section":
-                try:
-                    return self._carousel_items(payload, int(parts[2]), root)
-                except ValueError:
-                    return []
-            if len(parts) == 3 and parts[1] == "item":
-                return await self._browse_playlist_tracks(unquote(parts[2]))
+        if root == "artist" and len(parts) >= 2:
+            artist_id = unquote(parts[1])
+            payload = await self._get_json(f"/api/v1/artist/{artist_id}")
+            if len(parts) == 2:
+                result: list[MediaItemType | BrowseFolder] = []
+                songs = payload.get("songs") or {}
+                if isinstance(songs, dict): result.extend(self._tracks_from_items(songs.get("contents") or songs.get("items") or []))
+                result.extend(self._carousel_folders(payload, f"artist/{parts[1]}"))
+                return result
+            if len(parts) == 4 and parts[2] == "section":
+                try: return self._carousel_items(payload, int(parts[3]), f"artist/{parts[1]}")
+                except ValueError: return []
+            if len(parts) == 4 and parts[2] == "item":
+                return await self._browse_playlist_tracks(unquote(parts[3]))
             return []
-
+        if root in ("home", "trending"):
+            payload = await self._get_json("/api/v1/home.json" if root == "home" else "/api/v1/trending")
+            if len(parts) == 1: return self._carousel_folders(payload, root)
+            if len(parts) == 3 and parts[1] == "section":
+                try: return self._carousel_items(payload, int(parts[2]), root)
+                except ValueError: return []
+            if len(parts) == 3 and parts[1] == "item": return await self._browse_playlist_tracks(unquote(parts[2]))
+            return []
         if root == "explore":
             if len(parts) == 1:
                 payload = await self._get_json_any("/api/v1/explore")
-                if not isinstance(payload, list):
-                    return []
+                if not isinstance(payload, list): return []
                 result: list[BrowseFolder] = []
-                category_index = 0
+                n = 0
                 for section in payload:
-                    if not isinstance(section, dict):
-                        continue
+                    if not isinstance(section, dict): continue
                     for category in section.get("section") or []:
-                        if not isinstance(category, dict):
-                            continue
-                        name = _first_string(category, "text", "name")
-                        endpoint = category.get("endpoint") or {}
+                        if not isinstance(category, dict): continue
+                        name = _first_string(category, "text", "name"); endpoint = category.get("endpoint") or {}
                         params = _first_string(endpoint, "params") if isinstance(endpoint, dict) else None
-                        if not name or not params:
-                            continue
-                        token = quote(params, safe="")
-                        result.append(self._browse_folder(f"explore-{category_index}", f"explore/category/{token}", name))
-                        category_index += 1
+                        if name and params:
+                            token = quote(params, safe="")
+                            result.append(self._browse_folder(f"explore-{n}", f"explore/category/{token}", name)); n += 1
                 return result
             if len(parts) >= 3 and parts[1] == "category":
-                token = parts[2]
-                category = unquote(token)
+                token = parts[2]; category = unquote(token)
                 payload = await self._get_json(f"/api/v1/explore/{quote(category, safe='')}")
                 prefix = f"explore/category/{token}"
-                if len(parts) == 3:
-                    return self._carousel_folders(payload, prefix)
+                if len(parts) == 3: return self._carousel_folders(payload, prefix)
                 if len(parts) == 5 and parts[3] == "section":
-                    try:
-                        return self._carousel_items(payload, int(parts[4]), prefix)
-                    except ValueError:
-                        return []
-                if len(parts) == 5 and parts[3] == "item":
-                    return await self._browse_playlist_tracks(unquote(parts[4]))
+                    try: return self._carousel_items(payload, int(parts[4]), prefix)
+                    except ValueError: return []
+                if len(parts) == 5 and parts[3] == "item": return await self._browse_playlist_tracks(unquote(parts[4]))
             return []
         return []
 
@@ -195,90 +215,64 @@ class BeatbumpProvider(MusicProvider):
         return ProviderMapping(item_id=item_id, provider_domain=self.domain, provider_instance=self.instance_id, available=True, audio_format=AudioFormat(content_type=ContentType.M4A) if audio else None)
 
     def _artist_mapping(self, name: str, artist_id: str | None) -> ItemMapping | None:
-        if not artist_id:
-            return None
-        return ItemMapping(media_type=MediaType.ARTIST, item_id=artist_id, provider=self.instance_id, name=name)
+        return ItemMapping(media_type=MediaType.ARTIST, item_id=artist_id, provider=self.instance_id, name=name) if artist_id else None
 
     def _parse_track(self, data: dict[str, Any], position: int = 0) -> Track | None:
-        video_id = _first_string(data, "videoId")
-        title = _first_string(data, "title", "name", "text")
-        if not video_id or not title:
-            return None
-        artist_name, artist_id = _extract_artist(data)
-        artists = UniqueList()
-        if artist_name and (mapping := self._artist_mapping(artist_name, artist_id)):
-            artists.append(mapping)
+        video_id = _first_string(data, "videoId"); title = _first_string(data, "title", "name", "text")
+        if not video_id or not title: return None
+        artist_name, artist_id = _extract_artist(data); artists = UniqueList()
+        if artist_name and (mapping := self._artist_mapping(artist_name, artist_id)): artists.append(mapping)
         track = Track(item_id=video_id, provider=self.instance_id, name=title, duration=_extract_duration(data), provider_mappings={self._provider_mapping(video_id, True)}, position=position or None)
-        if artists:
-            track.artists = artists
+        if artists: track.artists = artists
+        self._add_images(track, data)
         return track
 
     async def get_artist(self, prov_artist_id: str) -> Artist:
-        payload = await self._get_json(f"/api/v1/artist/{prov_artist_id}")
-        header = payload.get("header") or {}
-        name = _first_string(header, "name", "title") or prov_artist_id
-        return Artist(item_id=prov_artist_id, provider=self.instance_id, name=name, provider_mappings={self._provider_mapping(prov_artist_id)})
+        payload = await self._get_json(f"/api/v1/artist/{prov_artist_id}"); header = payload.get("header") or {}
+        artist = Artist(item_id=prov_artist_id, provider=self.instance_id, name=_first_string(header, "name", "title") or prov_artist_id, provider_mappings={self._provider_mapping(prov_artist_id)})
+        if isinstance(header, dict): self._add_images(artist, header)
+        return artist
 
     async def get_track(self, prov_track_id: str) -> Track:
-        payload = await self._get_json("/api/v1/player.json", videoId=prov_track_id)
-        details = payload.get("videoDetails") or {}
-        title = str(details.get("title") or prov_track_id)
-        duration = _as_int(details.get("lengthSeconds"))
-        artist_mapping: ItemMapping | None = None
+        payload = await self._get_json("/api/v1/player.json", videoId=prov_track_id); details = payload.get("videoDetails") or {}
+        title = str(details.get("title") or prov_track_id); duration = _as_int(details.get("lengthSeconds")); artist_mapping = None; source_item = None
         try:
             for candidate in await self._search_songs(title):
-                if _first_string(candidate, "videoId") != prov_track_id:
-                    continue
-                artist_name, artist_id = _extract_artist(candidate)
-                artist_mapping = self._artist_mapping(artist_name, artist_id) if artist_name else None
-                break
-        except Exception as err:
-            self.logger.debug("Could not enrich Beatbump track %s: %s", prov_track_id, err)
+                if _first_string(candidate, "videoId") == prov_track_id:
+                    source_item = candidate; artist_name, artist_id = _extract_artist(candidate)
+                    artist_mapping = self._artist_mapping(artist_name, artist_id) if artist_name else None; break
+        except Exception as err: self.logger.debug("Could not enrich Beatbump track %s: %s", prov_track_id, err)
         track = Track(item_id=prov_track_id, provider=self.instance_id, name=title, duration=duration, provider_mappings={self._provider_mapping(prov_track_id, True)})
-        if artist_mapping:
-            track.artists = UniqueList([artist_mapping])
+        if artist_mapping: track.artists = UniqueList([artist_mapping])
+        if source_item: self._add_images(track, source_item)
         return track
 
     async def get_stream_details(self, item_id: str, media_type: MediaType) -> StreamDetails:
-        payload = await self._get_json("/api/v1/player.json", videoId=item_id)
-        status = (payload.get("playabilityStatus") or {}).get("status")
-        if status and status != "OK":
-            raise ValueError(f"Beatbump reports {item_id} as not playable: {status}")
+        payload = await self._get_json("/api/v1/player.json", videoId=item_id); status = (payload.get("playabilityStatus") or {}).get("status")
+        if status and status != "OK": raise ValueError(f"Beatbump reports {item_id} as not playable: {status}")
         formats = (payload.get("streamingData") or {}).get("adaptiveFormats") or []
         audio = [x for x in formats if isinstance(x, dict) and x.get("url") and "audio" in str(x.get("mimeType", "")).lower()]
-        if not audio:
-            raise ValueError(f"Beatbump returned no audio stream for {item_id}")
-        aac = [x for x in audio if _as_int(x.get("itag")) == 140]
-        selected = aac[0] if aac else max(audio, key=lambda x: _as_int(x.get("bitrate")) or 0)
-        url = str(selected["url"])
-        mime = str(selected.get("mimeType", "")).lower()
-        content_type = ContentType.M4A if "audio/mp4" in mime else ContentType.WEBM if "audio/webm" in mime else ContentType.UNKNOWN
-        expiration = 3600
-        expire = parse_qs(urlparse(url).query).get("expire", [None])[0]
+        if not audio: raise ValueError(f"Beatbump returned no audio stream for {item_id}")
+        aac = [x for x in audio if _as_int(x.get("itag")) == 140]; selected = aac[0] if aac else max(audio, key=lambda x: _as_int(x.get("bitrate")) or 0)
+        url = str(selected["url"]); mime = str(selected.get("mimeType", "")).lower(); content_type = ContentType.M4A if "audio/mp4" in mime else ContentType.WEBM if "audio/webm" in mime else ContentType.UNKNOWN
+        expiration = 3600; expire = parse_qs(urlparse(url).query).get("expire", [None])[0]
         if expire:
-            try:
-                expiration = max(60, int(expire) - int(time.time()))
-            except (TypeError, ValueError):
-                pass
+            try: expiration = max(60, int(expire) - int(time.time()))
+            except (TypeError, ValueError): pass
         duration_ms = _as_int(selected.get("approxDurationMs"))
-        self.logger.info("Beatbump playback %s -> itag=%s mime=%s", item_id, selected.get("itag"), selected.get("mimeType"))
         return StreamDetails(provider=self.instance_id, item_id=item_id, media_type=MediaType.TRACK, stream_type=StreamType.HTTP, path=url, audio_format=AudioFormat(content_type=content_type), duration=(duration_ms / 1000) if duration_ms else None, can_seek=True, allow_seek=True, expiration=expiration, is_realtime=True)
 
 def _first_string(data: Any, *keys: str) -> str | None:
-    if not isinstance(data, dict):
-        return None
+    if not isinstance(data, dict): return None
     for key in keys:
         value = data.get(key)
-        if isinstance(value, str) and value:
-            return value
+        if isinstance(value, str) and value: return value
     return None
 
 def _carousel_name(carousel: dict[str, Any]) -> str | None:
     header = carousel.get("header")
-    if isinstance(header, str) and header:
-        return header
-    if isinstance(header, dict):
-        return _first_string(header, "title", "text", "name")
+    if isinstance(header, str) and header: return header
+    if isinstance(header, dict): return _first_string(header, "title", "text", "name")
     return _first_string(carousel, "title", "name")
 
 def _extract_artist(data: dict[str, Any]) -> tuple[str, str | None]:
@@ -286,50 +280,36 @@ def _extract_artist(data: dict[str, Any]) -> tuple[str, str | None]:
     if isinstance(info, dict):
         artists = info.get("artist")
         if isinstance(artists, list) and artists and isinstance(artists[0], dict):
-            first = artists[0]
-            name = _first_string(first, "text", "name")
-            if name:
-                return name, _first_string(first, "browseId", "id")
+            first = artists[0]; name = _first_string(first, "text", "name")
+            if name: return name, _first_string(first, "browseId", "id")
     subtitle = data.get("subtitle")
     if isinstance(subtitle, list):
         for entry in subtitle:
             if isinstance(entry, dict) and "ARTIST" in str(entry.get("pageType", "")):
                 name = _first_string(entry, "text", "name")
-                if name:
-                    return name, _first_string(entry, "browseId", "id")
+                if name: return name, _first_string(entry, "browseId", "id")
     return "", None
 
 def _extract_duration(data: dict[str, Any]) -> int | None:
     for key in ("duration", "lengthSeconds"):
         value = _as_int(data.get(key))
-        if value is not None:
-            return value
+        if value is not None: return value
     length = data.get("length")
-    if isinstance(length, str):
-        parsed = _parse_duration_text(length)
-        if parsed is not None:
-            return parsed
+    if isinstance(length, str) and (parsed := _parse_duration_text(length)) is not None: return parsed
     subtitle = data.get("subtitle")
     if isinstance(subtitle, list):
         for entry in reversed(subtitle):
             text = entry.get("text") if isinstance(entry, dict) else None
-            if isinstance(text, str):
-                parsed = _parse_duration_text(text)
-                if parsed is not None:
-                    return parsed
+            if isinstance(text, str) and (parsed := _parse_duration_text(text)) is not None: return parsed
     return None
 
 def _parse_duration_text(text: str) -> int | None:
     parts = text.split(":")
-    if len(parts) not in (2, 3) or not all(x.isdigit() for x in parts):
-        return None
+    if len(parts) not in (2, 3) or not all(x.isdigit() for x in parts): return None
     seconds = 0
-    for part in parts:
-        seconds = seconds * 60 + int(part)
+    for part in parts: seconds = seconds * 60 + int(part)
     return seconds
 
 def _as_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    try: return int(value)
+    except (TypeError, ValueError): return None
