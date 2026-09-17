@@ -1,0 +1,8 @@
+{
+  "type": "music",
+  "domain": "beatbump",
+  "name": "Beatbump",
+  "description": "Use a self-hosted Beatbump server as a Music Assistant music source.",
+  "codeowners": ["@aaronh86"],
+  "requirements": []
+}
