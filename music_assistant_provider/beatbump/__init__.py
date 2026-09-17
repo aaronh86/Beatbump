@@ -101,9 +101,10 @@ class BeatbumpProvider(MusicProvider):
             browse_id = _first_string(endpoint, "browseId") if isinstance(endpoint, dict) else None
             page_type = _first_string(endpoint, "pageType") if isinstance(endpoint, dict) else None
             name = _first_string(item, "title", "name", "text")
-            # Albums and YouTube Music playlists both expose a playlistId which
-            # Beatbump's /playlist.json endpoint can resolve to playable tracks.
-            list_id = playlist_id or (browse_id if page_type == "MUSIC_PAGE_TYPE_PLAYLIST" else None)
+            # Beatbump's playlist Browse request needs the endpoint browseId (for
+            # example VLRDCLAK5...), not the RDCLAK5... playlistId exposed on
+            # Home/Trending items. Prefer browseId whenever Beatbump supplies it.
+            list_id = browse_id or playlist_id
             if name and list_id and list_id not in seen:
                 seen.add(list_id)
                 token = quote(list_id, safe="")
@@ -303,18 +304,29 @@ def _extract_duration(data: dict[str, Any]) -> int | None:
         value = _as_int(data.get(key))
         if value is not None:
             return value
+    length = data.get("length")
+    if isinstance(length, str):
+        parsed = _parse_duration_text(length)
+        if parsed is not None:
+            return parsed
     subtitle = data.get("subtitle")
     if isinstance(subtitle, list):
         for entry in reversed(subtitle):
             text = entry.get("text") if isinstance(entry, dict) else None
             if isinstance(text, str):
-                parts = text.split(":")
-                if len(parts) in (2, 3) and all(x.isdigit() for x in parts):
-                    seconds = 0
-                    for part in parts:
-                        seconds = seconds * 60 + int(part)
-                    return seconds
+                parsed = _parse_duration_text(text)
+                if parsed is not None:
+                    return parsed
     return None
+
+def _parse_duration_text(text: str) -> int | None:
+    parts = text.split(":")
+    if len(parts) not in (2, 3) or not all(x.isdigit() for x in parts):
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + int(part)
+    return seconds
 
 def _as_int(value: Any) -> int | None:
     try:
