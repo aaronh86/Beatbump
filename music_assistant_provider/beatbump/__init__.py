@@ -238,9 +238,7 @@ class BeatbumpProvider(MusicProvider):
 
     async def get_artist(self, prov_artist_id: str) -> Artist:
         payload = await self._get_json(f"/api/v1/artist/{prov_artist_id}"); header = payload.get("header") or {}
-        artist = Artist(item_id=prov_artist_id, provider=self.instance_id, name=_first_string(header, "name", "title") or prov_artist_id, provider_mappings={self._provider_mapping(prov_artist_id)})
-        if isinstance(header, dict): self._add_images(artist, header)
-        return artist
+        return Artist(item_id=prov_artist_id, provider=self.instance_id, name=_first_string(header, "name", "title") or prov_artist_id, provider_mappings={self._provider_mapping(prov_artist_id)})
 
     async def get_track(self, prov_track_id: str) -> Track:
         payload = await self._get_json("/api/v1/player.json", videoId=prov_track_id); details = payload.get("videoDetails") or {}
